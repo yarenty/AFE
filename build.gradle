@@ -1,0 +1,222 @@
+println """\
+Gradle $gradle.gradleVersion - http://www.gradle.org
+Gradle home is set to: $gradle.gradleHomeDir
+Gradle user directory is set to: $gradle.gradleUserHomeDir
+Base directory: $projectDir
+Running script ${relativePath(buildFile)}
+"""
+
+// Apply the java plugin to add support for Java
+apply plugin: 'scala'
+apply plugin: 'java'
+apply plugin: 'idea'
+apply plugin: 'eclipse'
+apply plugin: 'scalaStyle'
+apply plugin: "org.scoverage"
+
+// Support local launch of application 
+apply plugin: 'application'
+mainClassName = 'com.yarenty.afe.Main'
+// Setup group ID for this project
+group = "com.yarenty.afe"
+
+
+// The build script settings to fetch plugins and put them on classpath
+buildscript {
+    repositories {
+        maven {
+            url "http://repo1.maven.org/maven2/"
+        }
+        jcenter {
+            url "http://jcenter.bintray.com/"
+        }
+        maven {
+            url "http://plugins.gradle.org/m2/"
+        }
+    }
+
+    dependencies {
+        classpath 'com.github.jengelman.gradle.plugins:shadow:1.2.3'
+        classpath 'org.github.mansur.scalastyle:gradle-scalastyle-plugin_2.10:0.4.1'
+        classpath "gradle.plugin.org.scoverage:gradle-scoverage:2.1.0"
+    }
+}
+
+ext {
+    // Spark version
+    sparkVersion = '2.1'
+    // Latest stable version for the specified version of Spark
+    spWaterVersion = "${sparkVersion}.16"
+//    h2oVersion = '3.14.0.7'    
+    scalaBinaryVersion = '2.11'
+    scalaVersion = '2.11.8'
+    junitVersion = '4.12'
+}
+
+repositories {
+    maven {
+        url "http://repo1.maven.org/maven2/"
+    }
+    maven {
+        url "http://repository.cloudera.com/artifactory/cloudera-repos/"
+    }
+    maven {
+        url "http://repo.hortonworks.com/content/repositories/releases/"
+    }
+    maven {
+        url "http://oss.sonatype.org/content/repositories/releases/"
+    }
+    maven {
+        url "http://repository.apache.org/content/groups/snapshots"
+    }
+}
+
+dependencies {
+
+    // Sparkling Water Core
+    compile("ai.h2o:sparkling-water-core_${scalaBinaryVersion}:${spWaterVersion}") {
+        exclude group: "javax.servlet", module: "servlet-api"
+    }
+    // Sparkling Water Examples (optional)
+    compile("ai.h2o:sparkling-water-examples_${scalaBinaryVersion}:${spWaterVersion}")
+
+//    
+//    compile group: 'ai.h2o', name: 'h2o-core', version: "$h2oVersion"
+//    compile group: 'ai.h2o', name: 'h2o-algos', version: "$h2oVersion"
+//    compile group: 'ai.h2o', name: 'h2o-genmodel', version: "$h2oVersion"
+//    compile group: 'ai.h2o', name: "h2o-scala_${scalaBinaryVersion}", version: "$h2oVersion"
+//    compile group: 'ai.h2o', name: 'h2o-app', version: "$h2oVersion"
+
+    compile group: 'org.scala-lang', name: 'scala-library', version: "$scalaVersion"
+    compile group: 'org.joda', name: 'joda-convert', version: '1.8.1'
+    compile group: 'org.scalanlp', name: "breeze_${scalaBinaryVersion}", version: '0.13.2'
+
+
+    compile group: 'org.apache.commons', name: 'commons-math3', version: '3.6.1'
+//    compile group: 'io.argonaut', name: 'argonaut_2.10', version: '6.1'
+
+    // And use scalatest for Scala testing
+    testCompile group: 'org.scalatest', name: "scalatest_${scalaBinaryVersion}", version: '3.0.4'
+    testCompile group: 'org.scalanlp', name: "breeze-viz_${scalaBinaryVersion}", version: '0.13.2'
+    testCompile "junit:junit:${junitVersion}"
+
+    //code coverage
+    scoverage "org.scoverage:scalac-scoverage-plugin_${scalaBinaryVersion}:1.3.1", "org.scoverage:scalac-scoverage-runtime_${scalaBinaryVersion}:1.3.1"
+}
+
+// Activate Zinc compiler and configure scalac
+tasks.withType(ScalaCompile) {
+
+    ScalaCompileOptions.metaClass.daemonServer = true
+    ScalaCompileOptions.metaClass.fork = true
+    ScalaCompileOptions.metaClass.useAnt = false
+    ScalaCompileOptions.metaClass.useCompileDaemon = false
+}
+
+// In resulting jar include Scala binary version
+jar {
+    baseName = "${project.name}_${scalaBinaryVersion}"
+    manifest {
+        attributes(
+                "Class-Path": configurations.compile.collect { it.getName() }.join(' ')
+        )
+    }
+}
+
+scalaStyle {
+    //configLocation = "$rootDir/gradle/conf/scalastyle_conf.xml"
+    configLocation = "$rootDir/scalastyle-config.xml"
+    includeTestSourceDirectory = true
+    source = "src/main/scala"
+    testSource = "src/test/scala"
+    outputFile = "$buildDir/checkstyle-result.xml"
+}
+
+
+task scalatest(dependsOn: compileTestScala) << {
+    ant.taskdef(
+            name: 'scalatest',
+            classname: 'org.scalatest.tools.ScalaTestAntTask',
+            classpath: configurations.testRuntime.asPath + ':' + compileScala.destinationDir
+    )
+    ant.scalatest(
+            runpath: sourceSets.test.output.classesDir,
+            haltonfailure: 'false',
+            fork: 'false'
+    ) {
+        reporter(type: 'stderr')
+    }
+}
+
+test {
+    dependsOn scalatest
+}
+
+//task wrapper(type: Wrapper) {
+//    gradleVersion = '2.11'
+//}
+
+//to run from gradle cmd line: gradle run -PappArgs="['-arg1']"
+run {
+    if (project.hasProperty("appArgs")) {
+        args Eval.me(appArgs)
+    }
+}
+
+
+// Support for application assembly
+apply plugin: 'com.github.johnrengelman.shadow'
+
+shadowJar {
+    appendix = 'app'
+    archiveName = "afe.${extension}"
+
+    // Dependencies included in resulting jar file
+    dependencies {
+        
+        include(dependency("ai.h2o:sparkling-water-core_${scalaBinaryVersion}"))
+        include(dependency("ai.h2o:sparkling-water-examples_${scalaBinaryVersion}"))
+        include(dependency("ai.h2o:sparkling-water-repl_${scalaBinaryVersion}"))
+        include(dependency("ai.h2o:sparkling-water-ml_${scalaBinaryVersion}"))
+
+        
+        //SCALA dependency
+        include(dependency("org.scala-lang:scala-library"))
+        include(dependency("org.scala-lang:scala-reflect"))
+//        include(dependency("org.scalaz:scalaz-core_${scalaBinaryVersion}"))
+
+        //H2O
+        include(dependency("ai.h2o:h2o-core"))
+        include(dependency("ai.h2o:h2o-scala_${scalaBinaryVersion}"))
+        include(dependency("ai.h2o:h2o-app"))
+        include(dependency("ai.h2o:h2o-algos"))
+        include(dependency("ai.h2o:h2o-genmodel"))
+        include(dependency("ai.h2o:h2o-reflections"))
+        include(dependency("ai.h2o:h2o-avro-parser"))
+        include(dependency("ai.h2o:reflections"))
+        include(dependency("ai.h2o:google-analytics-java"))
+        include(dependency("ai.h2o:h2o-web"))
+        include(dependency("ai.h2o:h2o-persist-hdfs"))
+
+        //H2O dependency
+        include(dependency("joda-time:joda-time"))
+        include(dependency("org.joda:joda-convert"))
+
+        include(dependency("log4j:log4j"))
+        include(dependency("commons-io:commons-io"))
+        include(dependency("org.javassist:javassist"))
+        include(dependency("com.google.code.gson:gson"))
+        include(dependency("com.google.guava:guava"))
+
+        include(dependency("org.apache.httpcomponents:httpclient"))
+        include(dependency("org.apache.httpcomponents:httpcore"))
+        include(dependency("org.eclipse.jetty.orbit:javax.servlet:3.0.0.v201112011016"))
+
+        include(dependency("org.eclipse.jetty.aggregate:jetty-servlet"))
+        include(dependency("org.eclipse.jetty:jetty-server"))
+        include(dependency("org.eclipse.jetty:jetty-plus:8.1.17.v20150415"))
+        include(dependency("org.apache.commons:commons-math3"))
+
+
+    }
+}
